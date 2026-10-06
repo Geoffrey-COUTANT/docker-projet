@@ -57,7 +57,8 @@ async function waitForHost(page, host, timeout) {
     await page.waitForURL((url) => url.hostname === host, { timeout });
   } catch (error) {
     const body = await page.locator("body").innerText().catch(() => "<body unavailable>");
-    throw new Error(`Expected redirect to ${host}; current URL: ${page.url()}\n${body.slice(0, 2000)}\n${error.message}`);
+    const html = await page.content().catch(() => "<HTML unavailable>");
+    throw new Error(`Expected redirect to ${host}; current URL: ${page.url()}\n${body.slice(0, 2000)}\nHTML: ${html.slice(-5000)}\n${error.message}`);
   }
 }
 
@@ -66,6 +67,11 @@ async function waitForHost(page, host, timeout) {
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
+    page.on("console", (message) => {
+      if (message.type() === "error") console.error(`Browser console: ${message.text()}`);
+    });
+    page.on("pageerror", (error) => console.error(`Browser page error: ${error.message}`));
+    page.on("requestfailed", (request) => console.error(`Browser request failed: ${request.url()} ${request.failure()?.errorText || ""}`));
     const callbackResponses = [];
     page.on("response", (response) => {
       if (response.url().includes("/api/auth/callback/oidc")) callbackResponses.push(response.status());

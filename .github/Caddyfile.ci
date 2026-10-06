@@ -1,0 +1,7 @@
+http://localhost {
+	reverse_proxy rallly:3000
+}
+
+http://authentik.localhost {
+	reverse_proxy authentik-server:9000
+}

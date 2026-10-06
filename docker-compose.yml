@@ -1,0 +1,185 @@
+name: rallly-authentik
+
+services:
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      RALLLY_DOMAIN: ${RALLLY_DOMAIN:-rallly.localhost}
+      AUTHENTIK_DOMAIN: ${AUTHENTIK_DOMAIN:-authentik.localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - frontend
+    security_opt:
+      - no-new-privileges:true
+
+  rallly:
+    image: ${RALLLY_IMAGE:-lukevella/rallly:4}
+    restart: unless-stopped
+    depends_on:
+      rallly-db:
+        condition: service_healthy
+      garage:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-https://${RALLLY_DOMAIN:-rallly.localhost}}
+      SECRET_PASSWORD: ${SECRET_PASSWORD:?Set SECRET_PASSWORD in .env}
+      DATABASE_URL: postgres://postgres:${RALLLY_POSTGRES_PASSWORD:?Set RALLLY_POSTGRES_PASSWORD in .env}@rallly-db:5432/rallly
+      S3_ENDPOINT: http://garage:3900
+      S3_BUCKET_NAME: rallly
+      S3_REGION: garage
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?Set S3_ACCESS_KEY_ID in .env}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?Set S3_SECRET_ACCESS_KEY in .env}
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL:-admin@example.test}
+      NOREPLY_EMAIL: ${NOREPLY_EMAIL:-noreply@example.test}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PWD: ${SMTP_PWD:-}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      OIDC_NAME: ${OIDC_NAME:-Authentik}
+      OIDC_DISCOVERY_URL: ${OIDC_DISCOVERY_URL:-https://${AUTHENTIK_DOMAIN:-authentik.localhost}/application/o/rallly/.well-known/openid-configuration}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-https://${AUTHENTIK_DOMAIN:-authentik.localhost}/application/o/rallly/}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      NODE_EXTRA_CA_CERTS: /caddy-data/caddy/pki/authorities/local/root.crt
+    extra_hosts:
+      - "${AUTHENTIK_DOMAIN:-authentik.localhost}:host-gateway"
+    volumes:
+      - caddy_data:/caddy-data:ro
+    networks:
+      - frontend
+      - rallly_data
+    security_opt:
+      - no-new-privileges:true
+
+  rallly-db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rallly
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${RALLLY_POSTGRES_PASSWORD:?Set RALLLY_POSTGRES_PASSWORD in .env}
+    volumes:
+      - rallly_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rallly"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - rallly_data
+
+  garage:
+    image: dxflrs/garage:v2.3.0
+    restart: unless-stopped
+    command: /garage server --single-node --default-bucket
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?Set GARAGE_RPC_SECRET in .env}
+      GARAGE_DEFAULT_ACCESS_KEY: ${S3_ACCESS_KEY_ID:?Set S3_ACCESS_KEY_ID in .env}
+      GARAGE_DEFAULT_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:?Set S3_SECRET_ACCESS_KEY in .env}
+      GARAGE_DEFAULT_BUCKET: rallly
+    volumes:
+      - ./config/garage.toml:/etc/garage.toml:ro
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
+    networks:
+      - rallly_data
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2026.8.0
+    restart: unless-stopped
+    command: server
+    environment: &authentik_environment
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?Set AUTHENTIK_SECRET_KEY in .env}
+      AUTHENTIK_POSTGRESQL__HOST: authentik-db
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_POSTGRES_PASSWORD:?Set AUTHENTIK_POSTGRES_PASSWORD in .env}
+      AUTHENTIK_EMAIL__HOST: ${AUTHENTIK_EMAIL__HOST:-mailpit}
+      AUTHENTIK_EMAIL__PORT: ${AUTHENTIK_EMAIL__PORT:-1025}
+      AUTHENTIK_EMAIL__USE_SSL: ${AUTHENTIK_EMAIL__USE_SSL:-false}
+      AUTHENTIK_EMAIL__USE_TLS: ${AUTHENTIK_EMAIL__USE_TLS:-false}
+      AUTHENTIK_EMAIL__FROM: ${AUTHENTIK_EMAIL__FROM:-authentik@example.test}
+      AUTHENTIK_DISABLE_STARTUP_ANALYTICS: "true"
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+    volumes:
+      - authentik_media:/media
+      - authentik_templates:/templates
+    networks:
+      - frontend
+      - authentik_data
+    security_opt:
+      - no-new-privileges:true
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2026.8.0
+    restart: unless-stopped
+    command: worker
+    environment: *authentik_environment
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+    volumes:
+      - authentik_media:/media
+      - authentik_templates:/templates
+    networks:
+      - authentik_data
+    security_opt:
+      - no-new-privileges:true
+
+  authentik-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD: ${AUTHENTIK_POSTGRES_PASSWORD:?Set AUTHENTIK_POSTGRES_PASSWORD in .env}
+    volumes:
+      - authentik_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authentik -d authentik"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - authentik_data
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
+    networks:
+      - frontend
+      - rallly_data
+      - authentik_data
+
+networks:
+  frontend:
+  rallly_data:
+    internal: true
+  authentik_data:
+    internal: true
+
+volumes:
+  caddy_data:
+  caddy_config:
+  rallly_db_data:
+  garage_meta:
+  garage_data:
+  authentik_media:
+  authentik_templates:
+  authentik_db_data:

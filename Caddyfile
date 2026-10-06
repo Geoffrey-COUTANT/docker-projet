@@ -1,0 +1,11 @@
+{
+	email {$ACME_EMAIL:admin@example.test}
+}
+
+{$RALLLY_DOMAIN:rallly.localhost} {
+	reverse_proxy rallly:3000
+}
+
+{$AUTHENTIK_DOMAIN:authentik.localhost} {
+	reverse_proxy authentik-server:9000
+}

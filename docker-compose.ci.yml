@@ -1,0 +1,22 @@
+# Ephemeral plain-HTTP endpoints for the isolated CI runner. localhost callback
+# URLs are permitted by OAuth for local development; production remains HTTPS.
+services:
+  proxy:
+    volumes:
+      - ./.github/Caddyfile.ci:/etc/caddy/Caddyfile:ro
+  rallly:
+    environment:
+      NEXT_PUBLIC_BASE_URL: http://localhost
+      OIDC_DISCOVERY_URL: http://authentik.localhost/application/o/rallly/.well-known/openid-configuration
+      OIDC_ISSUER_URL: http://authentik.localhost/application/o/rallly/
+      NODE_EXTRA_CA_CERTS: ""
+  authentik-worker:
+    environment:
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD:?required for CI}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN:?required for CI}
+      RALLLY_OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?required for CI}
+      RALLLY_OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?required for CI}
+      RALLLY_OIDC_REDIRECT_URI: http://localhost/api/auth/callback/oidc
+      RALLLY_TEST_PASSWORD: ${RALLLY_TEST_PASSWORD:?required for CI}
+    volumes:
+      - ./config/blueprints/ci-rallly.yaml:/blueprints/custom/ci-rallly.yaml:ro

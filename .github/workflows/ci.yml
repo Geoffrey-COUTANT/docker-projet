@@ -1,0 +1,54 @@
+name: CI / OIDC end-to-end
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  oidc-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install browser test runtime
+        run: |
+          npm install --no-save --package-lock=false playwright@1.63.0
+          npx playwright install --with-deps chromium
+      - name: Generate isolated test credentials
+        run: python3 scripts/ci/write-env.py
+      - name: Validate production and CI Compose configurations
+        run: |
+          docker compose --env-file .env config --quiet
+          docker compose --env-file .env -f docker-compose.yml -f docker-compose.ci.yml config --quiet
+      - name: Start the complete stack and provision Authentik OIDC
+        run: docker compose --env-file .env -f docker-compose.yml -f docker-compose.ci.yml up --build --detach
+      - name: Wait for Rallly and Authentik OIDC discovery
+        run: |
+          for attempt in $(seq 1 120); do
+            if curl --silent --fail http://localhost/ >/dev/null \
+              && curl --silent --fail http://authentik.localhost/application/o/rallly/.well-known/openid-configuration >/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          docker compose --env-file .env -f docker-compose.yml -f docker-compose.ci.yml ps
+          docker compose --env-file .env -f docker-compose.yml -f docker-compose.ci.yml logs --tail=200 authentik-server authentik-worker rallly proxy
+          exit 1
+      - name: Verify successful OIDC login and Rallly session
+        env:
+          RALLLY_E2E_PASSWORD: ${{ env.RALLLY_TEST_PASSWORD }}
+        run: node scripts/ci/oidc-e2e.cjs
+      - name: Collect service logs on failure
+        if: failure()
+        run: docker compose --env-file .env -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250
+      - name: Stop test stack and remove ephemeral data
+        if: always()
+        run: docker compose --env-file .env -f docker-compose.yml -f docker-compose.ci.yml down --volumes --remove-orphans

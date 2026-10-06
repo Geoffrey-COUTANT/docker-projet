@@ -30,7 +30,7 @@ async function openProviderLogin(page) {
   }
   await providerButton.waitFor({ state: "visible", timeout: 20_000 });
   await providerButton.click();
-  await page.waitForURL((url) => url.hostname === "authentik.localhost", { timeout: 20_000 });
+  await waitForHost(page, "authentik.localhost", 20_000);
 }
 
 async function submitAuthentikCredentials(page, username) {
@@ -52,6 +52,15 @@ async function submitAuthentikCredentials(page, username) {
   ]))) throw new Error("Authentik password stage has no submit button");
 }
 
+async function waitForHost(page, host, timeout) {
+  try {
+    await page.waitForURL((url) => url.hostname === host, { timeout });
+  } catch (error) {
+    const body = await page.locator("body").innerText().catch(() => "<body unavailable>");
+    throw new Error(`Expected redirect to ${host}; current URL: ${page.url()}\n${body.slice(0, 2000)}\n${error.message}`);
+  }
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
@@ -63,7 +72,7 @@ async function submitAuthentikCredentials(page, username) {
     });
     await openProviderLogin(page);
     await submitAuthentikCredentials(page, "rallly-ci-user");
-    await page.waitForURL((url) => url.hostname === "localhost", { timeout: 30_000 });
+    await waitForHost(page, "localhost", 30_000);
     await page.waitForTimeout(1500);
     const sessionCookies = (await context.cookies(baseUrl)).filter((cookie) => /session/i.test(cookie.name));
     if (!sessionCookies.length) throw new Error("OIDC returned to Rallly but no session cookie was established");

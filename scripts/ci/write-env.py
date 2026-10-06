@@ -28,5 +28,6 @@ for line in sample.splitlines():
 (ROOT / ".env").write_text("\n".join(lines) + "\n")
 github_env = os.environ.get("GITHUB_ENV")
 if github_env:
+    print(f"::add-mask::{generated['RALLLY_TEST_PASSWORD']}")
     with open(github_env, "a", encoding="utf-8") as env_file:
         env_file.write(f"RALLLY_TEST_PASSWORD={generated['RALLLY_TEST_PASSWORD']}\n")
